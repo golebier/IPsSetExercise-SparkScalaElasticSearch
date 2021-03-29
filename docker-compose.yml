@@ -1,0 +1,140 @@
+version: '3'
+services:
+
+  mysql:
+    image: mysql:8
+    ports:
+      - "33060:3306"
+    expose:
+      - "3306"
+    volumes:
+      - ./setup.d/init.sql:/opt/setup.d/init.sql
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+      - "--init-file=/opt/setup.d/init.sql"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: gra
+      MYSQL_PASSWORD: gra
+      MYSQL_DATABASE: gra
+    networks:
+      - elastic
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.12.0
+    container_name: es01
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es02,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data01:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    expose:
+      - "9200"
+      - "9300"
+    networks:
+      - elastic
+  es02:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.12.0
+    container_name: es02
+    environment:
+      - node.name=es02
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data02:/usr/share/elasticsearch/data
+    networks:
+      - elastic
+  es03:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.12.0
+    container_name: es03
+    environment:
+      - node.name=es03
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es02
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data03:/usr/share/elasticsearch/data
+    networks:
+      - elastic
+
+  spark-master:
+    image: spydernaz/spark-master:latest
+    depends_on:
+      - mysql
+      - es01
+      - es02
+      - es03
+      - spark-worker
+    links:
+      - mysql
+      - es01
+      - es02
+      - es03
+      - spark-worker
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./target/jb-req-0.0.1-jar-with-dependencies.jar:/opt/spark-apps/jb-req-0.0.1-jar-with-dependencies.jar
+#    command: "/spark/bin/./spark-submit --class org.scala.gra.spark.job.ExtractMutuallyExclusiveRanges /opt/spark-apps/jb-req-0.0.1-jar-with-dependencies.jar"
+    # FIXME to start spark job we need to wait till the ES and DB is ready!
+    environment:
+      - "WAIT_CONTAINER_KEY:mysql:8"
+      - "SPARK_LOCAL_IP=spark-master"
+    networks:
+      - elastic
+
+  spark-worker:
+    image: spydernaz/spark-worker:latest
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=1
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_DRIVER_MEMORY=128m
+      - SPARK_EXECUTOR_MEMORY=256m
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+    networks:
+      - elastic
+
+volumes:
+  data01:
+    driver: local
+  data02:
+    driver: local
+  data03:
+    driver: local
+  setup.d:
+    driver: local
+
+networks:
+  elastic:
+    driver: bridge
